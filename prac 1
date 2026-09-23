@@ -1,1 +1,152 @@
-im gay
+#ifndef F_CPU
+#define F_CPU 16000000UL // Cấu hình thạch anh 16MHz
+#endif
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdio.h> // Để dùng hàm sprintf
+
+// ==========================================
+// THƯ VIỆN LCD (DÙNG CHẾ ĐỘ 4-BIT TRÊN PORTD)
+// ==========================================
+#define LCD_PORT PORTD
+#define LCD_DDR  DDRD
+#define RS PD2
+#define EN PD3
+// D4->D7 tương ứng với PD4->PD7
+
+// Hàm gửi 4 bit dữ liệu
+void LCD_Send4Bit(uint8_t data) {
+    // Xóa 4 bit cao của PORTD (PD4-PD7) và giữ lại 4 bit thấp
+    // Sau đó chèn 4 bit dữ liệu vào PD4-PD7
+    LCD_PORT = (LCD_PORT & 0x0F) | (data << 4);
+    
+    // Tạo xung Enable
+    LCD_PORT |= (1 << EN);
+    _delay_us(1);
+    LCD_PORT &= ~(1 << EN);
+    _delay_us(100);
+}
+
+void LCD_Command(uint8_t cmd) {
+    LCD_PORT &= ~(1 << RS); // RS = 0 để gửi Lệnh
+    LCD_Send4Bit(cmd >> 4);   // Gửi 4 bit cao
+    LCD_Send4Bit(cmd & 0x0F); // Gửi 4 bit thấp
+    _delay_ms(2);
+}
+
+void LCD_Char(uint8_t data) {
+    LCD_PORT |= (1 << RS);  // RS = 1 để gửi Dữ liệu (Ký tự)
+    LCD_Send4Bit(data >> 4);
+    LCD_Send4Bit(data & 0x0F);
+    _delay_ms(2);
+}
+
+void LCD_String(char *str) {
+    while (*str) LCD_Char(*str++);
+}
+
+void LCD_SetCursor(uint8_t row, uint8_t col) {
+    uint8_t address = (row == 0) ? (0x80 + col) : (0xC0 + col);
+    LCD_Command(address);
+}
+
+void LCD_Init() {
+    // Cấu hình chân output cho LCD trên PORTD
+    LCD_DDR |= (1<<RS) | (1<<EN) | (1<<PD4) | (1<<PD5) | (1<<PD6) | (1<<PD7);
+    _delay_ms(20);
+    
+    LCD_Command(0x33);
+    LCD_Command(0x32); // Mode 4-bit
+    LCD_Command(0x28); // 2 dòng, font 5x8
+    LCD_Command(0x0C); // Bật màn hình, tắt con trỏ
+    LCD_Command(0x01); // Xóa màn hình
+    _delay_ms(2);
+}
+
+// ==========================================
+// THƯ VIỆN ADC (CĂN LỀ PHẢI, ĐỌC ADCL TRƯỚC)
+// ==========================================
+void ADC_Init() {
+    // REFS0 = 1: Chọn điện áp tham chiếu AVCC (5V)
+    // ADLAR = 0: Căn lề phải (Right adjust - 8 bit dưới ở ADCL, 2 bit trên ở ADCH)
+    ADMUX = (1 << REFS0);
+    
+    // ADEN = 1: Bật ADC
+    // ADPS2..0 = 111: Chia xung nhịp Prescaler 128 (16MHz/128 = 125kHz)
+    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+uint16_t ADC_Read(uint8_t channel) {
+    // Chọn kênh đọc (Từ 0 đến 7)
+    channel &= 0b00000111;
+    ADMUX = (ADMUX & 0xF8) | channel;
+    
+    // Bắt đầu chuyển đổi (Polling)
+    ADCSRA |= (1 << ADSC);
+    
+    // Vòng lặp rỗng chờ cờ ngắt ADIF bật lên (Báo hiệu chuyển đổi xong)
+    while ((ADCSRA & (1 << ADIF)) == 0);
+    
+    // Xóa cờ ngắt
+    ADCSRA |= (1 << ADIF);
+    
+    // BẮT BUỘC: Đọc ADCL trước, ADCH sau
+    uint8_t low_byte  = ADCL; 
+    uint8_t high_byte = ADCH;
+    
+    // Ép kiểu 16 bit, dịch 2 bit của ADCH sang trái 8 vị trí, 
+    // sau đó OR với 8 bit của ADCL để tạo thành một số 10-bit hoàn chỉnh.
+    uint16_t adc_value = ((uint16_t)high_byte << 8) | low_byte;
+    
+    return adc_value;
+}
+
+// ==========================================
+// CHƯƠNG TRÌNH CHÍNH
+// ==========================================
+int main(void) {
+    LCD_Init();
+    ADC_Init();
+    
+    char buffer[16]; // Mảng chứa chuỗi để in lên LCD
+    
+    while (1) {
+        uint32_t adc_sum = 0;
+        uint16_t adc_avg = 0;
+        float voltage = 0.0;
+        
+        // 1. Lấy mẫu 16 lần (Sampling 16)
+        for (int i = 0; i < 16; i++) {
+            adc_sum += ADC_Read(0); // Đọc ADC tại kênh 0 (chân PC0)
+            _delay_ms(5); // Sampling rate: Cách nhau 5ms mỗi lần đọc
+        }
+        
+        // 2. Tính trung bình (Average)
+        adc_avg = adc_sum / 16;
+        
+        // 3. Đổi giá trị Raw sang Điện áp (Convert raw to voltage)
+        // V = (ADC_avg * V_ref) / 1024
+        voltage = ((float)adc_avg * 5.0) / 1024.0;
+        
+        // Tách phần nguyên và phần thập phân của điện áp để hiển thị
+        int v_int = (int)voltage;
+        int v_dec = (int)((voltage - v_int) * 100); // Lấy 2 số thập phân
+        
+        // 4. Hiển thị lên LCD
+        // Hàng 1: Giá trị ADC trung bình
+        sprintf(buffer, "ADC Avg: %d   ", adc_avg);
+        LCD_SetCursor(0, 0);
+        LCD_String(buffer);
+        
+        // Hàng 2: Giá trị điện áp tương ứng
+        sprintf(buffer, "Voltage: %d.%02d V", v_int, v_dec);
+        LCD_SetCursor(1, 0);
+        LCD_String(buffer);
+        
+        // Cập nhật màn hình 0.5 giây 1 lần
+        _delay_ms(500);
+    }
+    
+    return 0;
+}
