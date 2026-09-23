@@ -1,0 +1,66 @@
+#include <Arduino.h>
+#include <Servo.h>
+
+// Định nghĩa chân điều khiển và dải góc an toàn cho Servo
+#define PIN_SERVO       5       // Chân PD9 xuất xung Servo PWM
+#define MIN_ANGLE       0       // Góc nhỏ nhất cho phép
+#define MAX_ANGLE       180     // Góc lớn nhất cho phép
+
+Servo myServo;                  // Khởi tạo đối tượng Servo
+
+void setup() {
+  // Khởi tạo giao tiếp Serial với máy tính ở baudrate 115200
+  Serial.begin(115200);
+  
+  // Gắn chân điều khiển cho Servo
+  myServo.attach(PIN_SERVO);
+  
+  // Đặt vị trí ban đầu cho Servo ở góc 0 độ
+  myServo.write(MIN_ANGLE);
+
+  // In thông báo khởi động và hướng dẫn sử dụng
+  Serial.println("\n==================================================");
+  Serial.println("   PRACTICE 9: SERIAL CONTROL OF A SERVO MOTOR    ");
+  Serial.println("==================================================");
+  Serial.print("Huong dan: Nhap goc tu ");
+  Serial.print(MIN_ANGLE);
+  Serial.print(" den ");
+  Serial.print(MAX_ANGLE);
+  Serial.println(" va nhan Enter (VD: 45, 90, 180).");
+}
+
+void loop() {
+  // Kiểm tra xem có dữ liệu gửi từ Serial Monitor về không
+  if (Serial.available() > 0) {
+    // Đọc số nguyên từ chuỗi Serial (tự động bỏ qua ký tự xuống dòng \n \r)
+    int inputAngle = Serial.parseInt();
+
+    // Kiểm tra ký tự đệm trống (Xử lý trường hợp nhận giá trị 0 do dư ký tự)
+    if (Serial.read() == '\n' || Serial.available() == 0) {
+      
+      // --- BƯỚC VALIDATION: KIỂM TRA DẢI GÓC CHO PHÉP ---
+      if (inputAngle >= MIN_ANGLE && inputAngle <= MAX_ANGLE) {
+        
+        // Lệnh hợp lệ: Thực thi quay Servo
+        myServo.write(inputAngle);
+        
+        // BƯỚC CONFIRMATION: Gửi phản hồi xác nhận thành công
+        Serial.print("[SUCCESS] Command accepted. Servo rotated to: ");
+        Serial.print(inputAngle);
+        Serial.println(" deg.");
+        
+      } else {
+        
+        // Lệnh KHÔNG hợp lệ: Báo lỗi và từ chối thực thi
+        Serial.print("[ERROR] Rejected! Requested angle (");
+        Serial.print(inputAngle);
+        Serial.print(") is out of range [");
+        Serial.print(MIN_ANGLE);
+        Serial.print(" - ");
+        Serial.print(MAX_ANGLE);
+        Serial.println("].");
+        
+      }
+    }
+  }
+}
