@@ -1,0 +1,524 @@
+#include <Arduino.h>
+#include <avr/io.h>
+#include <stdint.h>
+
+/*
+ * ============================================================
+ * PRACTICE 8: I2C AND SENSOR
+ *
+ * ATmega328P + AHT20
+ *
+ * NO Wire.h
+ * NO I2C LIBRARY
+ *
+ * I2C:
+ *   PC4 / A4 = SDA
+ *   PC5 / A5 = SCL
+ *
+ * AHT20:
+ *   7-bit I2C Address = 0x38
+ * ============================================================
+ */
+
+#define AHT20_ADDR 0x38
+
+
+// ============================================================
+// I2C INITIALIZATION
+// ============================================================
+
+void i2c_init(void)
+{
+    /*
+     * ATmega328P = 16 MHz
+     *
+     * I2C = 100 kHz
+     *
+     * TWPS = 0
+     * TWBR = 72
+     */
+
+    TWSR = 0x00;
+    TWBR = 72;
+
+    // Enable TWI
+    TWCR = (1 << TWEN);
+}
+
+
+// ============================================================
+// I2C START
+// ============================================================
+
+bool i2c_start(void)
+{
+    Serial.println("[I2C] START...");
+
+    TWCR = (1 << TWINT) |
+           (1 << TWSTA) |
+           (1 << TWEN);
+
+    uint32_t timeout = millis();
+
+    while (!(TWCR & (1 << TWINT)))
+    {
+        if (millis() - timeout > 100)
+        {
+            Serial.println("[I2C] START TIMEOUT!");
+            return false;
+        }
+    }
+
+    uint8_t status = TWSR & 0xF8;
+
+    if (status != 0x08 && status != 0x10)
+    {
+        Serial.print("[I2C] START ERROR: 0x");
+        Serial.println(status, HEX);
+
+        return false;
+    }
+
+    return true;
+}
+
+
+// ============================================================
+// I2C WRITE
+// ============================================================
+
+bool i2c_write(uint8_t data)
+{
+    TWDR = data;
+
+    TWCR = (1 << TWINT) |
+           (1 << TWEN);
+
+    uint32_t timeout = millis();
+
+    while (!(TWCR & (1 << TWINT)))
+    {
+        if (millis() - timeout > 100)
+        {
+            Serial.println("[I2C] WRITE TIMEOUT!");
+            return false;
+        }
+    }
+
+    uint8_t status = TWSR & 0xF8;
+
+    /*
+     * 0x18 = SLA+W transmitted, ACK received
+     * 0x28 = DATA transmitted, ACK received
+     */
+
+    if (status != 0x18 && status != 0x28)
+    {
+        Serial.print("[I2C] WRITE NACK / ERROR: 0x");
+        Serial.println(status, HEX);
+
+        return false;
+    }
+
+    return true;
+}
+
+
+// ============================================================
+// I2C READ WITH ACK
+// ============================================================
+
+uint8_t i2c_read_ack(void)
+{
+    TWCR = (1 << TWINT) |
+           (1 << TWEA)  |
+           (1 << TWEN);
+
+    uint32_t timeout = millis();
+
+    while (!(TWCR & (1 << TWINT)))
+    {
+        if (millis() - timeout > 100)
+        {
+            Serial.println("[I2C] READ ACK TIMEOUT!");
+            return 0;
+        }
+    }
+
+    return TWDR;
+}
+
+
+// ============================================================
+// I2C READ WITH NACK
+// ============================================================
+
+uint8_t i2c_read_nack(void)
+{
+    TWCR = (1 << TWINT) |
+           (1 << TWEN);
+
+    uint32_t timeout = millis();
+
+    while (!(TWCR & (1 << TWINT)))
+    {
+        if (millis() - timeout > 100)
+        {
+            Serial.println("[I2C] READ NACK TIMEOUT!");
+            return 0;
+        }
+    }
+
+    return TWDR;
+}
+
+
+// ============================================================
+// I2C STOP
+// ============================================================
+
+void i2c_stop(void)
+{
+    TWCR = (1 << TWINT) |
+           (1 << TWEN)   |
+           (1 << TWSTO);
+
+    delayMicroseconds(10);
+}
+
+
+// ============================================================
+// AHT20 INITIALIZATION
+// ============================================================
+
+bool AHT20_init(void)
+{
+    Serial.println("[AHT20] Initialization...");
+
+    if (!i2c_start())
+        return false;
+
+    /*
+     * Address + WRITE
+     *
+     * 0x38 << 1 = 0x70
+     */
+
+    if (!i2c_write((AHT20_ADDR << 1) | 0))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    /*
+     * Initialization command
+     */
+
+    if (!i2c_write(0xBE))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    if (!i2c_write(0x08))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    if (!i2c_write(0x00))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    i2c_stop();
+
+    delay(10);
+
+    Serial.println("[AHT20] Initialization OK.");
+
+    return true;
+}
+
+
+// ============================================================
+// AHT20 START MEASUREMENT
+// ============================================================
+
+bool AHT20_start_measurement(void)
+{
+    Serial.println("[AHT20] Starting measurement...");
+
+    if (!i2c_start())
+        return false;
+
+    /*
+     * Address + WRITE
+     */
+
+    if (!i2c_write((AHT20_ADDR << 1) | 0))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    /*
+     * Measurement command:
+     *
+     * 0xAC
+     * 0x33
+     * 0x00
+     */
+
+    if (!i2c_write(0xAC))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    if (!i2c_write(0x33))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    if (!i2c_write(0x00))
+    {
+        i2c_stop();
+        return false;
+    }
+
+    i2c_stop();
+
+    return true;
+}
+
+
+// ============================================================
+// AHT20 READ DATA
+// ============================================================
+
+bool AHT20_read_data(float *temperature,
+                     float *humidity)
+{
+    uint8_t data[7];
+
+    /*
+     * Wait for measurement
+     */
+
+    delay(80);
+
+    Serial.println("[AHT20] Reading data...");
+
+    /*
+     * START
+     */
+
+    if (!i2c_start())
+        return false;
+
+    /*
+     * Address + READ
+     *
+     * 0x38 << 1 = 0x70
+     * + READ bit
+     *
+     * = 0x71
+     */
+
+    TWDR = (AHT20_ADDR << 1) | 1;
+
+    TWCR = (1 << TWINT) |
+           (1 << TWEN);
+
+    uint32_t timeout = millis();
+
+    while (!(TWCR & (1 << TWINT)))
+    {
+        if (millis() - timeout > 100)
+        {
+            Serial.println("[AHT20] READ ADDRESS TIMEOUT!");
+            i2c_stop();
+            return false;
+        }
+    }
+
+    uint8_t status = TWSR & 0xF8;
+
+    /*
+     * 0x40 = SLA+R transmitted, ACK received
+     */
+
+    if (status != 0x40)
+    {
+        Serial.print("[AHT20] READ ADDRESS ERROR: 0x");
+        Serial.println(status, HEX);
+
+        i2c_stop();
+        return false;
+    }
+
+    /*
+     * Read 7 bytes
+     */
+
+    data[0] = i2c_read_ack();
+    data[1] = i2c_read_ack();
+    data[2] = i2c_read_ack();
+    data[3] = i2c_read_ack();
+    data[4] = i2c_read_ack();
+    data[5] = i2c_read_ack();
+
+    /*
+     * Last byte:
+     * NACK
+     */
+
+    data[6] = i2c_read_nack();
+
+    i2c_stop();
+
+
+    // ========================================================
+    // CHECK SENSOR STATUS
+    // ========================================================
+
+    /*
+     * Bit 7 = Busy
+     *
+     * If 1 -> measurement still running
+     */
+
+    if (data[0] & 0x80)
+    {
+        Serial.println("[AHT20] Sensor still busy!");
+
+        return false;
+    }
+
+
+    // ========================================================
+    // CONVERT HUMIDITY
+    // ========================================================
+
+    uint32_t raw_humidity;
+
+    raw_humidity =
+        ((uint32_t)data[1] << 12) |
+        ((uint32_t)data[2] << 4)  |
+        ((data[3] >> 4) & 0x0F);
+
+
+    *humidity =
+        ((float)raw_humidity * 100.0) / 1048576.0;
+
+
+    // ========================================================
+    // CONVERT TEMPERATURE
+    // ========================================================
+
+    uint32_t raw_temperature;
+
+    raw_temperature =
+        ((uint32_t)(data[3] & 0x0F) << 16) |
+        ((uint32_t)data[4] << 8) |
+        data[5];
+
+
+    *temperature =
+        ((float)raw_temperature * 200.0) /
+        1048576.0 - 50.0;
+
+
+    return true;
+}
+
+
+// ============================================================
+// SETUP
+// ============================================================
+
+void setup()
+{
+    Serial.begin(9600);
+
+    delay(1000);
+
+    Serial.println();
+    Serial.println("==============================");
+    Serial.println("Practice 8 - I2C + AHT20");
+    Serial.println("ATmega328P");
+    Serial.println("==============================");
+
+
+    // Initialize I2C
+
+    i2c_init();
+
+    Serial.println("I2C initialized.");
+
+
+    // Initialize AHT20
+
+    if (!AHT20_init())
+    {
+        Serial.println("AHT20 initialization FAILED!");
+    }
+    else
+    {
+        Serial.println("AHT20 initialized.");
+    }
+
+    Serial.println();
+}
+
+
+// ============================================================
+// LOOP
+// ============================================================
+
+void loop()
+{
+    float temperature;
+    float humidity;
+
+
+    // Start measurement
+
+    if (!AHT20_start_measurement())
+    {
+        Serial.println("Measurement START failed.");
+        delay(1000);
+        return;
+    }
+
+
+    // Read data
+
+    if (!AHT20_read_data(&temperature, &humidity))
+    {
+        Serial.println("Sensor reading FAILED.");
+        delay(1000);
+        return;
+    }
+
+
+    // Display result
+
+    Serial.print("Temperature: ");
+    Serial.print(temperature, 2);
+    Serial.println(" C");
+
+
+    Serial.print("Humidity: ");
+    Serial.print(humidity, 2);
+    Serial.println(" %");
+
+
+    Serial.println("----------------------------");
+
+
+    delay(1000);
+}
